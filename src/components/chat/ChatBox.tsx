@@ -45,6 +45,23 @@ export const ChatBox = () => {
     return typeof v === "number" && Number.isFinite(v) ? v : 0;
   };
 
+  // Ensure numbers are prefixed with ₹ so the parser/db doesn't drop the amount
+  const normalizeRupeeMessage = (text: string) => {
+    return text
+      .split(/\s+/)
+      .map((tok) => {
+        const t = tok.trim();
+        if (!t) return t;
+        if (t.startsWith("₹")) return t;
+        // ignore tokens like "rs" or "inr"
+        if (/^(rs\.?|inr)$/i.test(t)) return t;
+        const numeric = t.replace(/,/g, "");
+        if (/^\d+(?:\.\d+)?$/.test(numeric)) return `₹${numeric}`;
+        return t;
+      })
+      .join(" ");
+  };
+
   const sendToParser = async (
     message: string,
     opts?: { autoCommit?: boolean; categoryId?: number }
@@ -52,7 +69,7 @@ export const ChatBox = () => {
     const res = await fetch("/api/parse", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, autoCommit: opts?.autoCommit ?? false, category_id: opts?.categoryId }),
+      body: JSON.stringify({ message: normalizeRupeeMessage(message), autoCommit: opts?.autoCommit ?? false, category_id: opts?.categoryId }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data?.error || "Failed to parse");
@@ -140,20 +157,22 @@ export const ChatBox = () => {
       if (lastAssistant && lastAssistant.meta?.parsed) {
         // If we previously suggested a category and user said yes -> commit directly
         if (isYes && lastAssistant.meta?.suggestedCategory) {
-          const p = lastAssistant.meta.parsed;
-          const res = await fetch("/api/transactions", {
+          const original = [...messages].reverse().find((mm) => mm.role === "user") as Message | undefined;
+          const originalText = original?.role === "user" ? original.text : input.trim();
+
+          // Re-parse and auto-commit using the original user message to ensure amount is correctly derived (avoids ₹0.00)
+          const commit = await fetch("/api/parse", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              description: p.description,
-              vendor: p.vendor,
-              amount_cents: amountCentsOf(p),
-              date: p.date,
+              message: normalizeRupeeMessage(originalText),
+              autoCommit: true,
               category_id: lastAssistant.meta.suggestedCategory.id,
             }),
           });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data?.error || "Failed to add transaction");
+          const data = await commit.json();
+          if (!commit.ok) throw new Error(data?.error || "Failed to add transaction");
+
           setMessages((prev) => [
             ...prev,
             {
@@ -290,7 +309,7 @@ export const ChatBox = () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          message: original && (original as any).role === "user" ? (original as any).text : m.meta.parsed.description,
+          message: original && (original as any).role === "user" ? normalizeRupeeMessage((original as any).text) : normalizeRupeeMessage(m.meta.parsed.description),
           autoCommit: true,
           category_id: categoryId,
         }),
