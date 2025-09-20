@@ -22,7 +22,7 @@ type BudgetResponse = {
 
 type Recurring = {
   id: number;
-  name: string;
+  description: string; // was name
   vendor?: string | null;
   amountCents: number;
   categoryId: number;
@@ -54,6 +54,15 @@ export const SettingsForm = () => {
     categoryId: number | "";
     dayOfMonth: number | "";
   }>({ name: "", vendor: "", amount: "", categoryId: "", dayOfMonth: "" });
+  // inline edit state
+  const [editId, setEditId] = useState<number | null>(null);
+  const [editForm, setEditForm] = useState<{
+    description: string;
+    vendor: string;
+    amount: string; // rupees
+    categoryId: number | "";
+    dayOfMonth: number | "";
+  }>({ description: "", vendor: "", amount: "", categoryId: "", dayOfMonth: "" });
 
   useEffect(() => {
     const load = async () => {
@@ -190,7 +199,7 @@ export const SettingsForm = () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: name.trim(),
+          description: name.trim(), // API expects description
           vendor: vendor.trim() || null,
           amount_cents: Math.round(rupees * 100),
           category_id: Number(categoryId),
@@ -222,17 +231,59 @@ export const SettingsForm = () => {
 
   const handleDeleteRecurring = async (id: number) => {
     try {
-      const res = await fetch("/api/recurring", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
-      });
+      const res = await fetch(`/api/recurring?id=${id}`, { method: "DELETE" });
       const j = await res.json();
       if (!res.ok) throw new Error(j?.error || "Failed to delete recurring");
       toast.success("Recurring deleted");
       loadRecurring();
     } catch (e: any) {
       toast.error(e.message || "Failed to delete recurring");
+    }
+  };
+
+  const startEdit = (r: Recurring) => {
+    setEditId(r.id);
+    setEditForm({
+      description: r.description,
+      vendor: r.vendor || "",
+      amount: (r.amountCents / 100).toString(),
+      categoryId: r.categoryId,
+      dayOfMonth: r.dayOfMonth,
+    });
+  };
+
+  const cancelEdit = () => {
+    setEditId(null);
+  };
+
+  const handleUpdateRecurring = async () => {
+    if (editId == null) return;
+    const { description, vendor, amount, categoryId, dayOfMonth } = editForm;
+    if (!description.trim() || !amount.toString().trim() || !categoryId || !dayOfMonth) {
+      toast.error("Fill all fields to update");
+      return;
+    }
+    try {
+      const rupees = parseFloat(amount as string);
+      if (isNaN(rupees) || rupees <= 0) throw new Error("Invalid amount");
+      const res = await fetch(`/api/recurring?id=${editId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          description: description.trim(),
+          vendor: vendor.trim() || null,
+          amount_cents: Math.round(rupees * 100),
+          category_id: Number(categoryId),
+          day_of_month: Number(dayOfMonth),
+        }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j?.error || "Failed to update recurring");
+      toast.success("Recurring updated");
+      setEditId(null);
+      loadRecurring();
+    } catch (e: any) {
+      toast.error(e.message || "Failed to update recurring");
     }
   };
 
@@ -331,7 +382,7 @@ export const SettingsForm = () => {
           </div>
           <button onClick={handleAddCategory} className="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-primary-foreground">Add</button>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">Note: Delete/rename categories isnt available yet.</p>
+        <p className="mt-2 text-xs text-muted-foreground">Note: Delete/rename categories isn't available yet.</p>
       </div>
 
       {/* Recurring expenses */}
@@ -350,16 +401,72 @@ export const SettingsForm = () => {
             <p className="text-sm text-muted-foreground">No recurring items.</p>
           ) : (
             recurring.map((r) => (
-              <div key={r.id} className="flex items-center justify-between rounded-md border p-2 text-sm">
-                <div className="flex items-center gap-3">
-                  <span className="font-medium">{r.name}</span>
-                  <span className="text-muted-foreground">{r.vendor || "—"}</span>
-                  <span className="text-muted-foreground">Day {r.dayOfMonth}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">{new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(r.amountCents / 100)}</span>
-                  <button onClick={() => handleDeleteRecurring(r.id)} className="rounded-md border px-2 py-1 text-xs hover:bg-accent">Delete</button>
-                </div>
+              <div key={r.id} className="flex flex-col gap-2 rounded-md border p-2 text-sm">
+                {editId === r.id ? (
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+                    <input
+                      value={editForm.description}
+                      onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
+                      className="rounded-md border px-2 py-1 text-sm"
+                      placeholder="Description"
+                    />
+                    <input
+                      value={editForm.vendor}
+                      onChange={(e) => setEditForm((f) => ({ ...f, vendor: e.target.value }))}
+                      className="rounded-md border px-2 py-1 text-sm"
+                      placeholder="Vendor"
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={editForm.amount}
+                      onChange={(e) => setEditForm((f) => ({ ...f, amount: e.target.value }))}
+                      className="rounded-md border px-2 py-1 text-sm"
+                      placeholder="Amount (₹)"
+                    />
+                    <select
+                      value={editForm.categoryId}
+                      onChange={(e) => setEditForm((f) => ({ ...f, categoryId: Number(e.target.value) }))}
+                      className="rounded-md border px-2 py-1 text-sm"
+                    >
+                      <option value="">Category</option>
+                      {categories.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.emoji ? `${c.emoji} ` : ""}
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={editForm.dayOfMonth}
+                      onChange={(e) => setEditForm((f) => ({ ...f, dayOfMonth: Number(e.target.value) }))}
+                      className="rounded-md border px-2 py-1 text-sm"
+                    >
+                      <option value="">Day</option>
+                      {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                    </select>
+                    <div className="flex items-center gap-2">
+                      <button onClick={handleUpdateRecurring} className="rounded-md bg-primary px-3 py-1 text-xs text-primary-foreground">Save</button>
+                      <button onClick={cancelEdit} className="rounded-md border px-3 py-1 text-xs hover:bg-accent">Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className="font-medium">{r.description}</span>
+                      <span className="text-muted-foreground">{r.vendor || "—"}</span>
+                      <span className="text-muted-foreground">Day {r.dayOfMonth}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(r.amountCents / 100)}</span>
+                      <button onClick={() => startEdit(r)} className="rounded-md border px-2 py-1 text-xs hover:bg-accent">Edit</button>
+                      <button onClick={() => handleDeleteRecurring(r.id)} className="rounded-md border px-2 py-1 text-xs hover:bg-accent">Delete</button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))
           )}
