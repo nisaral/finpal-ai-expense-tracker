@@ -135,7 +135,12 @@ export async function POST(request: NextRequest) {
     let amount = 0;
     let amountCents = 0;
     if (amountMatch && amountMatch.length > 0) {
-      amount = parseFloat(amountMatch[amountMatch.length - 1]);
+      // Prefer the largest plausible money value, ignoring likely years
+      const candidates = amountMatch
+        .map(Number)
+        .filter((n) => isFinite(n) && !(n >= 1900 && n <= 2099));
+      const chosen = candidates.length > 0 ? Math.max(...candidates) : Number(amountMatch[amountMatch.length - 1]);
+      amount = chosen;
       amountCents = Math.round(amount * 100);
     }
 

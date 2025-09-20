@@ -58,7 +58,12 @@ export const TransactionsTable = () => {
   const load = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`/api/transactions?${params}`, { cache: "no-store" });
+      const res = await fetch(`/api/transactions?${params}`, { 
+        cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${typeof window !== 'undefined' ? localStorage.getItem("bearer_token") || "" : ""}`,
+        },
+      });
       const json: ListResponse = await res.json();
       if (!res.ok) throw new Error((json as any)?.error || "Failed to load transactions");
       // normalize items to ensure amountCents/categoryId exist for UI safety
@@ -86,7 +91,12 @@ export const TransactionsTable = () => {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(`/api/categories?limit=200`, { cache: "no-store" });
+        const r = await fetch(`/api/categories?limit=200`, { 
+          cache: "no-store",
+          headers: {
+            Authorization: `Bearer ${typeof window !== 'undefined' ? localStorage.getItem("bearer_token") || "" : ""}`,
+          },
+        });
         const j: TxCategory[] = await r.json();
         if (!r.ok) throw new Error((j as any)?.error || "Failed to load categories");
         setCategories(j);
@@ -110,16 +120,19 @@ export const TransactionsTable = () => {
     if (!editingId) return;
     try {
       const body = {
-        id: editingId,
+        // remove id from body, API expects it in query param
         date: editDraft.date,
         description: editDraft.description,
         vendor: editDraft.vendor,
         amount_cents: editDraft.amountCents, // send snake_case to API
         category_id: editDraft.categoryId,   // send snake_case to API
       };
-      const res = await fetch(`/api/transactions`, {
+      const res = await fetch(`/api/transactions?id=${editingId}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${typeof window !== 'undefined' ? localStorage.getItem("bearer_token") || "" : ""}`,
+        },
         body: JSON.stringify(body),
       });
       const j = await res.json();
@@ -133,10 +146,11 @@ export const TransactionsTable = () => {
   };
   const deleteTx = async (id: number) => {
     try {
-      const res = await fetch(`/api/transactions`, {
+      const res = await fetch(`/api/transactions?id=${id}`, {
         method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
+        headers: { 
+          Authorization: `Bearer ${typeof window !== 'undefined' ? localStorage.getItem("bearer_token") || "" : ""}`,
+        },
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j?.error || "Failed to delete");
