@@ -3,6 +3,44 @@ import { db } from '@/db';
 import { transactions, categories, vendorRules, splits } from '@/db/schema';
 import { eq, and, desc } from 'drizzle-orm';
 
+// Mistral fallback (server-side) for robust parsing when regex/keywords fail
+const MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions";
+async function llmExtract(message: string, categoryNames: string[]): Promise<{ amount?: number; vendor?: string; category?: string } | null> {
+  try {
+    const apiKey = process.env.MISTRAL_API_KEY;
+    if (!apiKey) return null;
+
+    const system = `You are an expense parser. Extract structured data from a short message.
+Return a compact JSON with keys: amount (number, rupees), vendor (string lowercase words only), category (one of: ${categoryNames.join(", ")}).
+If category uncertain, choose the closest from the list. Do not include any explanation.`;
+
+    const res = await fetch(MISTRAL_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'mistral-small-latest',
+        temperature: 0.1,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: message }
+        ],
+        response_format: { type: 'text' },
+      }),
+    });
+    const data = await res.json();
+    const content: string = data?.choices?.[0]?.message?.content ?? '';
+    // try to parse JSON from content
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(content);
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 const CATEGORY_KEYWORDS: Record<string, string[]> = {
   "Eating Out": ["dinner","lunch","breakfast","cafe","restaurant","zomato","swiggy","mcd","pizza","burger","food"],
   "Groceries": ["grocery","groceries","milk","vegetables","dmart","bigbasket","big basket","fruits","bread"],
@@ -31,19 +69,16 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // Extract amount
+    // Extract amount (fallback to LLM if needed)
     const amountMatch = message.match(/\d+(?:\.\d{1,2})?/g);
-    if (!amountMatch || amountMatch.length === 0) {
-      return NextResponse.json({ 
-        error: "No amount found in message",
-        code: "NO_AMOUNT_FOUND" 
-      }, { status: 400 });
+    let amount = 0;
+    let amountCents = 0;
+    if (amountMatch && amountMatch.length > 0) {
+      amount = parseFloat(amountMatch[amountMatch.length - 1]);
+      amountCents = Math.round(amount * 100);
     }
 
-    const amount = parseFloat(amountMatch[amountMatch.length - 1]);
-    const amountCents = Math.round(amount * 100);
-
-    // Extract vendor/keyword
+    // Extract vendor/keyword (simple heuristic)
     const cleanMessage = message
       .replace(/\d+(?:\.\d{1,2})?/g, '') // Remove numbers
       .replace(/[₹$€£¥]/g, '') // Remove currency symbols
@@ -56,7 +91,7 @@ export async function POST(request: NextRequest) {
       .filter(token => token.length > 0 && !STOPWORDS.includes(token))
       .slice(0, 3); // Take first 3 meaningful tokens
 
-    const vendor = tokens.join(' ') || 'unknown';
+    let vendor = tokens.join(' ') || 'unknown';
 
     // Parse date
     let transactionDate = date;
@@ -125,7 +160,40 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // If still no category, return all categories for selection
+    // If amount missing OR category still unknown, try LLM fallback
+    if ((!amountCents || amountCents <= 0) || !suggestedCategory) {
+      const allCategories = await db.select().from(categories).orderBy(categories.name);
+      const names = allCategories.map(c => c.name);
+      const llm = await llmExtract(message, names);
+      if (llm) {
+        if ((!amountCents || amountCents <= 0) && typeof llm.amount === 'number' && isFinite(llm.amount)) {
+          amount = llm.amount;
+          amountCents = Math.round(amount * 100);
+        }
+        if (vendor === 'unknown' && typeof llm.vendor === 'string' && llm.vendor.trim()) {
+          vendor = llm.vendor.toLowerCase();
+        }
+        if (!suggestedCategory && typeof llm.category === 'string' && llm.category.trim()) {
+          const match = allCategories.find(c => c.name.toLowerCase() === llm.category.toLowerCase());
+          if (match) suggestedCategory = match;
+        }
+        // If still no category but we fetched allCategories above and caller needs options
+        if (!suggestedCategory && allCategories.length > 0) {
+          return NextResponse.json({
+            requiresCategory: true,
+            parsed: {
+              description: message,
+              vendor,
+              amountCents,
+              date: transactionDate,
+            },
+            categories: allCategories,
+          });
+        }
+      }
+    }
+
+    // If still no category (and LLM didn't help), return all categories for selection
     if (!suggestedCategory) {
       const allCategories = await db.select()
         .from(categories)
