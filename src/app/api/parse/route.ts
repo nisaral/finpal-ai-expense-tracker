@@ -41,6 +41,67 @@ If category uncertain, choose the closest from the list. Do not include any expl
   }
 }
 
+// --- New: simple natural-language date parsing ---
+function pad(n: number) { return n < 10 ? `0${n}` : `${n}`; }
+const MONTHS: Record<string, number> = {
+  jan: 0, january: 0,
+  feb: 1, february: 1,
+  mar: 2, march: 2,
+  apr: 3, april: 3,
+  may: 4,
+  jun: 5, june: 5,
+  jul: 6, july: 6,
+  aug: 7, august: 7,
+  sep: 8, sept: 8, september: 8,
+  oct: 9, october: 9,
+  nov: 10, november: 10,
+  dec: 11, december: 11,
+};
+function parseDateFromText(text: string): string | null {
+  const t = text.toLowerCase().trim();
+  const today = new Date();
+  // today / yesterday
+  if (/\b(today)\b/.test(t)) {
+    return `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+  }
+  if (/\b(yday|yesterday)\b/.test(t)) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - 1);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+  // dd[st|nd|rd|th]? (\s|-) mon[th] [yyyy]
+  const m1 = t.match(/\b(\d{1,2})(?:st|nd|rd|th)?[\s-]*(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\b(?:[\s,-]*(\d{2,4}))?/i);
+  if (m1) {
+    const day = parseInt(m1[1], 10);
+    const monName = m1[2].toLowerCase();
+    const mon = MONTHS[monName];
+    if (mon != null) {
+      let year = m1[3] ? parseInt(m1[3], 10) : today.getFullYear();
+      if (year < 100) year += 2000;
+      const d = new Date(year, mon, day);
+      if (!isNaN(d.getTime())) return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }
+  }
+  // dd/mm[/yyyy] or dd-mm[-yyyy]
+  const m2 = t.match(/\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/);
+  if (m2) {
+    const d = parseInt(m2[1], 10);
+    const m = parseInt(m2[2], 10) - 1;
+    let y = m2[3] ? parseInt(m2[3], 10) : today.getFullYear();
+    if (y < 100) y += 2000;
+    const dt = new Date(y, m, d);
+    if (!isNaN(dt.getTime())) return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+  }
+  // "on 12th" of current month/year
+  const m3 = t.match(/\bon\s+(\d{1,2})(?:st|nd|rd|th)?\b/);
+  if (m3) {
+    const d = new Date(today);
+    d.setDate(parseInt(m3[1], 10));
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+  return null;
+}
+
 const CATEGORY_KEYWORDS: Record<string, string[]> = {
   "Eating Out": ["dinner","lunch","breakfast","cafe","restaurant","zomato","swiggy","mcd","pizza","burger","food"],
   "Groceries": ["grocery","groceries","milk","vegetables","dmart","bigbasket","big basket","fruits","bread"],
@@ -96,8 +157,13 @@ export async function POST(request: NextRequest) {
     // Parse date
     let transactionDate = date;
     if (!transactionDate) {
-      const today = new Date();
-      transactionDate = today.toISOString().split('T')[0];
+      const parsedNLDate = parseDateFromText(message);
+      if (parsedNLDate) {
+        transactionDate = parsedNLDate;
+      } else {
+        const today = new Date();
+        transactionDate = today.toISOString().split('T')[0];
+      }
     } else {
       // Validate date format
       const dateRegex = /^\d{4}-\d{2}-\d{2}$/;

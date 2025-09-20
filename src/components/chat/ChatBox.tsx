@@ -29,6 +29,10 @@ export const ChatBox = () => {
   ]);
   const listRef = useRef<HTMLDivElement>(null);
 
+  // New: category selection + creation state when assistant asks to choose
+  const [selectedCategoryId, setSelectedCategoryId] = useState<number | "">("");
+  const [newCategoryName, setNewCategoryName] = useState("");
+
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
   }, [messages.length]);
@@ -331,6 +335,32 @@ export const ChatBox = () => {
     }
   };
 
+  // Use selected category from dropdown
+  const handleUseSelectedCategory = async (m: Message, remember: boolean) => {
+    if (selectedCategoryId === "") return toast.error("Please pick a category");
+    await handleChooseCategory(m, Number(selectedCategoryId), remember);
+    setSelectedCategoryId("");
+  };
+
+  // Create a new category then use it (and remember vendor rule)
+  const handleCreateAndUseCategory = async (m: Message) => {
+    const name = newCategoryName.trim();
+    if (!name) return toast.error("Enter a category name");
+    try {
+      const res = await fetch("/api/categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const cat = await res.json();
+      if (!res.ok) throw new Error(cat?.error || "Failed to create category");
+      setNewCategoryName("");
+      await handleChooseCategory(m, Number(cat.id), true);
+    } catch (e: any) {
+      toast.error(e.message || "Could not create category");
+    }
+  };
+
   return (
     <div className="flex h-[70vh] flex-col rounded-lg border">
       <div ref={listRef} className="flex-1 space-y-4 overflow-y-auto p-4">
@@ -360,19 +390,51 @@ export const ChatBox = () => {
                 </div>
               )}
               {m.role === "assistant" && m.meta?.requiresCategory && m.meta.categories && (
-                <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-                  <span>Remember choice for next time?</span>
-                  <div className="flex flex-wrap gap-2">
-                    {m.meta.categories.slice(0, 6).map((c) => (
+                <div className="mt-2 flex flex-col gap-2 text-xs">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <select
+                      className="rounded-md border px-2 py-1 text-sm"
+                      value={selectedCategoryId}
+                      onChange={(e) => setSelectedCategoryId(e.target.value ? Number(e.target.value) : "")}
+                    >
+                      <option value="">Select a category</option>
+                      {m.meta.categories.map((c) => (
+                        <option key={`sel-${c.id}`} value={c.id}>
+                          {c.emoji ? `${c.emoji} ` : ""}
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="flex gap-2">
                       <button
-                        key={`remember-${c.id}`}
                         className="rounded-md border px-2 py-1 hover:bg-accent"
-                        onClick={() => handleChooseCategory(m, c.id, true)}
+                        onClick={() => handleUseSelectedCategory(m, false)}
                       >
-                        Save {c.name}
+                        Use selected
                       </button>
-                    ))}
+                      <button
+                        className="rounded-md border px-2 py-1 hover:bg-accent"
+                        onClick={() => handleUseSelectedCategory(m, true)}
+                      >
+                        Use & remember
+                      </button>
+                    </div>
                   </div>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <input
+                      className="rounded-md border px-2 py-1 text-sm"
+                      placeholder="New category name"
+                      value={newCategoryName}
+                      onChange={(e) => setNewCategoryName(e.target.value)}
+                    />
+                    <button
+                      className="rounded-md border px-2 py-1 hover:bg-accent"
+                      onClick={() => handleCreateAndUseCategory(m)}
+                    >
+                      Create & use (remember)
+                    </button>
+                  </div>
+                  <p className="text-muted-foreground">Tip: I'll remember your choice for this vendor when you pick "Use & remember".</p>
                 </div>
               )}
             </div>
