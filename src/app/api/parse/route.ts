@@ -10,9 +10,9 @@ async function llmExtract(message: string, categoryNames: string[]): Promise<{ a
     const apiKey = process.env.MISTRAL_API_KEY;
     if (!apiKey) return null;
 
-    const system = `You are an expense parser. Extract structured data from a short message.
+    const system = `You are an expense parser. Extract structured data from a short message. The message can be in English or Hindi or mixed.
 Return a compact JSON with keys: amount (number, rupees), vendor (string lowercase words only), category (one of: ${categoryNames.join(", ")}).
-If category uncertain, choose the closest from the list. Do not include any explanation.`;
+If category uncertain, choose the closest from the list. Handle Hindi words by mapping to appropriate categories (e.g., khana -> Eating Out, sabji -> Groceries). Do not include any explanation.`;
 
     const res = await fetch(MISTRAL_API_URL, {
       method: 'POST',
@@ -103,15 +103,15 @@ function parseDateFromText(text: string): string | null {
 }
 
 const CATEGORY_KEYWORDS: Record<string, string[]> = {
-  "Eating Out": ["dinner","lunch","breakfast","cafe","restaurant","zomato","swiggy","mcd","pizza","burger","food"],
-  "Groceries": ["grocery","groceries","milk","vegetables","dmart","bigbasket","big basket","fruits","bread"],
-  "Transport": ["uber","ola","metro","bus","rickshaw","fuel","petrol","diesel","cab","taxi","train"],
-  "Entertainment": ["movie","movies","netflix","spotify","bookmyshow","bms","gaming","game","cinema"],
-  "Bills & Utilities": ["rent","electricity","bill","wifi","internet","dth","gas","water","phone"],
-  "Shopping": ["shopping","amazon","flipkart","myntra","clothes","shirt","shoes"],
-  "Health": ["doctor","medicine","pharmacy","hospital","clinic","medical"],
-  "Travel": ["flight","train","hotel","airbnb","booking","trip","vacation"],
-  "Education": ["course","udemy","coursera","books","tuition","class","school"]
+  "Eating Out": ["dinner","lunch","breakfast","cafe","restaurant","zomato","swiggy","mcd","pizza","burger","food", "khana", "khaana", "dabba", "bhojan", "restaurant", "hotel"],
+  "Groceries": ["grocery","groceries","milk","vegetables","dmart","bigbasket","big basket","fruits","bread", "sabji", "sabhji", "kirana", "dukan", "doodh", "phala"],
+  "Transport": ["uber","ola","metro","bus","rickshaw","fuel","petrol","diesel","cab","taxi","train", "rhoda", "auto", "petrol", "diesel"],
+  "Entertainment": ["movie","movies","netflix","spotify","bookmyshow","bms","gaming","game","cinema", "filam", "picchar", "tamasha"],
+  "Bills & Utilities": ["rent","electricity","bill","wifi","internet","dth","gas","water","phone", "bhada", "bijli", "paani", "gas", "phone bill"],
+  "Shopping": ["shopping","amazon","flipkart","myntra","clothes","shirt","shoes", "khareedari", "kapde", "joota"],
+  "Health": ["doctor","medicine","pharmacy","hospital","clinic","medical", "doktar", "dawai", "auspatal"],
+  "Travel": ["flight","train","hotel","airbnb","booking","trip","vacation", "hawaai jahaj", "train", "yatra"],
+  "Education": ["course","udemy","coursera","books","tuition","class","school", "padhai", "kitab", "school"]
 };
 
 const STOPWORDS = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'was', 'are', 'were'];

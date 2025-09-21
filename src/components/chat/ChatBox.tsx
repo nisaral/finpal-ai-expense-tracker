@@ -2,6 +2,9 @@
 
 import { useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Combobox } from "@/components/ui/combobox";
 
 type Message =
   | { id: string; role: "user"; text: string }
@@ -143,6 +146,109 @@ export const ChatBox = () => {
     }
   };
 
+  const handleBudgetQuery = async (text: string) => {
+    try {
+      // Extract category from "budget for [category]?"
+      const m = text.toLowerCase().match(/budget\s+for\s+([a-z&\s]+)/i);
+      const categoryQuery = m?.[1]?.trim();
+      
+      // Fetch budgets for the category (or all if no specific)
+      const budgetQs = new URLSearchParams({ period: 'currentCycle' });
+      if (categoryQuery) budgetQs.set('category', categoryQuery);
+      const budgetRes = await fetch(`/api/budgets?${budgetQs.toString()}`);
+      const budgetData = await budgetRes.json();
+      if (!budgetRes.ok) throw new Error(budgetData?.error || 'Failed to get budgets');
+      
+      // Fetch spent for comparison
+      const summaryQs = new URLSearchParams({ period: 'currentCycle' });
+      if (categoryQuery) summaryQs.set('category', categoryQuery);
+      const summaryRes = await fetch(`/api/summaries?${summaryQs.toString()}`);
+      const summaryData = await summaryRes.json();
+      if (!summaryRes.ok) throw new Error(summaryData?.error || 'Failed to get spending');
+      
+      const spentCents = summaryData?.totals?.spent_cents ?? 0;
+      const budgetCents = budgetData?.budgets?.[0]?.allocated_cents ?? 0;
+      const remainingCents = Math.max(0, budgetCents - spentCents);
+      const usedPercent = budgetCents > 0 ? Math.round((spentCents / budgetCents) * 100) : 0;
+      
+      let response = categoryQuery 
+        ? `Your budget for ${categoryQuery}: ${formatINR(budgetCents)}. Spent: ${formatINR(spentCents)} (${usedPercent}%). Remaining: ${formatINR(remainingCents)}.`
+        : `Total budget: ${formatINR(sumBudgetAllocated(budgetData.budgets))}. Total spent: ${formatINR(spentCents)}.`;
+      
+      setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'assistant', text: response }]);
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to get budget info');
+      setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'assistant', text: 'Sorry, couldn\'t fetch budget details. Check your budgets in settings.' }]);
+    }
+  };
+
+  // Helper to sum budget allocation
+  const sumBudgetAllocated = (budgets: Array<any>) => budgets.reduce((sum, b) => sum + (b.allocated_cents || 0), 0);
+
+  // Handle recurring status
+  const handleRecurringQuery = async () => {
+    try {
+      const res = await fetch('/api/recurring?limit=10');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to get recurring');
+      
+      if (data.length === 0) {
+        setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'assistant', text: 'No recurring expenses set up yet.' }]);
+        return;
+      }
+      
+      const list = data.map((r: any) => 
+        `${r.description}: ${formatINR(r.amountCents)} on ${r.dayOfMonth}th (${r.active ? 'active' : 'inactive'})`
+      ).join('\n');
+      
+      setMessages((prev) => [...prev, { 
+        id: crypto.randomUUID(), 
+        role: 'assistant', 
+        text: `Your recurring expenses:\n${list}\n\nSet more in Settings.` 
+      }]);
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to get recurring');
+      setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'assistant', text: 'Sorry, couldn\'t fetch recurring expenses.' }]);
+    }
+  };
+
+  // Handle trend questions
+  const handleTrendQuery = async (text: string) => {
+    try {
+      // Fetch last 3 months for trend
+      const periods = ['lastMonth', 'thisMonth', 'currentCycle']; // Adjust as needed
+      const trends: Array<{ period: string; spent: number }> = [];
+      
+      for (const p of periods) {
+        const qs = new URLSearchParams({ period: p });
+        const res = await fetch(`/api/summaries?${qs.toString()}`);
+        const data = await res.json();
+        if (res.ok) trends.push({ period: p, spent: data.totals?.spent_cents ?? 0 });
+      }
+      
+      const latest = trends[trends.length - 1]?.spent || 0;
+      const previous = trends[trends.length - 2]?.spent || 0;
+      const change = latest - previous;
+      const changePercent = previous > 0 ? Math.round((change / previous) * 100) : 0;
+      
+      const summary = trends.map(t => `${t.period}: ${formatINR(t.spent)}`).join('\n');
+      const trendText = change > 0 
+        ? `Spending is up ${changePercent}% (${formatINR(change)}).`
+        : change < 0 
+        ? `Spending is down ${Math.abs(changePercent)}% (${formatINR(Math.abs(change))}).`
+        : 'Spending is stable.';
+      
+      setMessages((prev) => [...prev, { 
+        id: crypto.randomUUID(), 
+        role: 'assistant', 
+        text: `${summary}\n\n${trendText}` 
+      }]);
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to get trends');
+      setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'assistant', text: 'Sorry, couldn\'t fetch spending trends.' }]);
+    }
+  };
+
   const handleSend = async () => {
     const trimmed = input.trim();
     if (!trimmed) return;
@@ -214,6 +320,24 @@ export const ChatBox = () => {
           setIsSending(false);
           return;
         }
+      }
+
+      // Detect budget query
+      if (t.includes('budget for') || t.includes('budget?') || t.includes('remaining budget')) {
+        await handleBudgetQuery(trimmed);
+        return;
+      }
+      
+      // Detect recurring query
+      if (t.includes('recurring') || t.includes('subscription') || t.includes('subscriptions')) {
+        await handleRecurringQuery();
+        return;
+      }
+      
+      // Detect trend query
+      if (t.includes('trend') || t.includes('compare spending') || t.includes('month over month')) {
+        await handleTrendQuery(trimmed);
+        return;
       }
 
       if (looksLikeSummary(trimmed)) {
@@ -376,65 +500,54 @@ export const ChatBox = () => {
             >
               <p className="whitespace-pre-wrap">{m.text}</p>
               {m.role === "assistant" && m.meta?.requiresCategory && m.meta.categories && (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {m.meta.categories.map((c) => (
-                    <button
-                      key={c.id}
-                      className="rounded-md border px-2 py-1 text-xs hover:bg-accent"
-                      onClick={() => handleChooseCategory(m, c.id, false)}
-                    >
-                      {c.emoji ? `${c.emoji} ` : ""}
-                      {c.name}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {m.role === "assistant" && m.meta?.requiresCategory && m.meta.categories && (
                 <div className="mt-2 flex flex-col gap-2 text-xs">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                    <select
-                      className="rounded-md border px-2 py-1 text-sm"
-                      value={selectedCategoryId}
-                      onChange={(e) => setSelectedCategoryId(e.target.value ? Number(e.target.value) : "")}
-                    >
-                      <option value="">Select a category</option>
-                      {m.meta.categories.map((c) => (
-                        <option key={`sel-${c.id}`} value={c.id}>
-                          {c.emoji ? `${c.emoji} ` : ""}
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
+                    <Combobox
+                      options={m.meta.categories.map(cat => ({
+                        value: cat.id.toString(),
+                        label: `${cat.emoji ? `${cat.emoji} ` : ""}${cat.name}`,
+                      }))}
+                      onSelect={(value) => setSelectedCategoryId(Number(value))}
+                      placeholder="Select a category"
+                    />
                     <div className="flex gap-2">
-                      <button
-                        className="rounded-md border px-2 py-1 hover:bg-accent"
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
                         onClick={() => handleUseSelectedCategory(m, false)}
+                        disabled={!selectedCategoryId}
                       >
                         Use selected
-                      </button>
-                      <button
-                        className="rounded-md border px-2 py-1 hover:bg-accent"
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
                         onClick={() => handleUseSelectedCategory(m, true)}
+                        disabled={!selectedCategoryId}
                       >
                         Use & remember
-                      </button>
+                      </Button>
                     </div>
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                    <input
-                      className="rounded-md border px-2 py-1 text-sm"
+                    <Input
                       placeholder="New category name"
                       value={newCategoryName}
                       onChange={(e) => setNewCategoryName(e.target.value)}
                     />
-                    <button
-                      className="rounded-md border px-2 py-1 hover:bg-accent"
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
                       onClick={() => handleCreateAndUseCategory(m)}
+                      disabled={!newCategoryName.trim()}
                     >
                       Create & use (remember)
-                    </button>
+                    </Button>
                   </div>
-                  <p className="text-muted-foreground">Tip: I'll remember your choice for this vendor when you pick "Use & remember".</p>
+                  <p className="text-muted-foreground text-xs">Tip: I'll remember your choice for this vendor when you pick "Use & remember".</p>
                 </div>
               )}
             </div>
