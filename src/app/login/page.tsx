@@ -1,13 +1,15 @@
 "use client";
 
+import { Suspense } from "react";
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { authClient, useSession } from "@/lib/auth-client";
 
-export default function LoginPage() {
+function LoginForm({ registered }: { registered: boolean }) {
+  "use client";
+
   const router = useRouter();
-  const search = useSearchParams();
   const { data: session, isPending } = useSession();
 
   const [email, setEmail] = useState("");
@@ -16,16 +18,16 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    if (registered) {
+      toast.success("Account created! Please login.");
+    }
+  }, [registered]);
+
+  useEffect(() => {
     if (!isPending && session?.user) {
       router.push("/dashboard");
     }
   }, [session, isPending, router]);
-
-  useEffect(() => {
-    if (search.get("registered") === "true") {
-      toast.success("Account created! Please login.");
-    }
-  }, [search]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -101,5 +103,15 @@ export default function LoginPage() {
         </form>
       </div>
     </main>
+  );
+}
+
+export default function LoginPage({ searchParams }: { searchParams: { registered?: string } }) {
+  const registered = searchParams.registered === "true";
+
+  return (
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center">Loading...</div>}>
+      <LoginForm registered={registered} />
+    </Suspense>
   );
 }
